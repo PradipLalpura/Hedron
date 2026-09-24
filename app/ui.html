@@ -74,6 +74,9 @@ footer { text-align: center; color: var(--mut); font-size: 12px; padding: 14px; 
   <div class="pill" id="proofPill">● Local · checking…</div>
   <button id="themeBtn" title="toggle theme">light / dark</button>
 </header>
+<div id="offBanner" class="card" style="display:none;max-width:1400px;margin:12px auto 0;border-color:var(--bad)">
+  <b>Backend offline.</b> Start it with <code>python app/server.py</code>, then reload this window.
+</div>
 <main>
   <section>
     <div class="card"><div class="row" style="margin-top:0">
@@ -111,6 +114,11 @@ footer { text-align: center; color: var(--mut); font-size: 12px; padding: 14px; 
 <footer>Hedron MVP · localhost only · <span id="auditLine">audit: …</span></footer>
 <script>
 const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) || d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+};
+let backendUp = false;
 let lastModel = null, lastAnswer = "", attachedFiles = 0;
 let sid = "chat-" + Date.now().toString(36), threads = {};
 async function refreshSessions() {
@@ -131,11 +139,13 @@ async function refreshSessions() {
     $("memBadge").textContent = "memory: " + (me ? me.turns : 0) + " turns";
   } catch {}
 }
+let theme = store.get("hedron-theme", "dark");
 document.documentElement.dataset.theme = theme;
 $("themeBtn").onclick = () => {
   theme = theme === "dark" ? "light" : "dark";
-let theme = localStorage.getItem("hedron-theme") || "dark";
-document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.theme = theme;
+  store.set("hedron-theme", theme);
+};
 $("newChat").onclick = () => {
   threads[sid] = $("thread").innerHTML;
   sid = "chat-" + Date.now().toString(36);
@@ -155,8 +165,6 @@ $("sess").onchange = async e => {
   }
   lastModel = null; refreshSessions();
 };
-  localStorage.setItem("hedron-theme", theme);
-};
 function toast(t) { const e = $("toast"); e.textContent = t; e.style.display = "block"; setTimeout(() => e.style.display = "none", 3500); }
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 async function refreshProof() {
@@ -168,7 +176,11 @@ async function refreshProof() {
       kv("chain", p.chain_ok ? "ok" : "BROKEN") + kv("resident", (p.resident || []).join(", ") || "—") +
       kv("ctx", p.num_ctx);
     $("auditLine").textContent = "audit: " + p.audit_events + " events · chain " + (p.chain_ok ? "ok" : "BROKEN");
-  } catch { $("proofPill").textContent = "● backend offline"; }
+  } catch { $("proofPill").textContent = "● backend offline"; backendUp = false;
+    const b0 = $("offBanner"); if (b0) b0.style.display = "block"; }
+  backendUp = true;
+  const banner = $("offBanner");
+  if (banner) banner.style.display = "none";
 }
 const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${esc(String(v))}</b></div>`;
 $("file").onchange = async e => {
@@ -205,7 +217,8 @@ $("go").onclick = async () => {
       addMsg(warn ? "a msg-warn" : "a",
         `<span class="badge">node ${i + 1} · ${esc(r.scope)} · score ${r.classifier.score}</span>` +
         `<span class="badge model">routed: ${esc(m)} · ${esc(n.router.reason)}</span><br><br>` +
-        esc(n.answer).replace(/\n/g, "<br>") + (cites ? "<br>" + cites : ""));
+        esc(n.answer).replace(/\n/g, "<br>") + (cites ? "<br>" + cites : "") +
+        (n.file ? `<br><a class="ghost" style="display:inline-block;margin-top:8px;text-decoration:none" href="${n.file.url}" download="${esc(n.file.name)}">download ${esc(n.file.name)}</a>` : ""));
       if (i === 0) lastAnswer = n.answer;
     });
     attachedFiles = 0; $("files").innerHTML = "";

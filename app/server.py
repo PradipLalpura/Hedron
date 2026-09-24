@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 from collections import deque
@@ -288,7 +289,16 @@ def chat(body: ChatIn):
             if want_note and ctx:
                 q = "Reply as My-SOP-Note (finding, clause [doc p.X], action):\n" + q
             ans = generate(n["router"]["model"], q, imgs or None)
-            out.append({**n, "answer": ans, "cites": cites if docish else []})
+            node = {**n, "answer": ans, "cites": cites if docish else []}
+            fk = file_kind(n["subtask"])  # "give it as docx/pdf/pptx" → build now
+            if fk and not ans.startswith("not in SOP"):
+                try:
+                    fp, _m = _build_artifact(fk, n["subtask"][:40], ans.split("\n")[:30])
+                    node["file"] = {"kind": fk, "name": os.path.basename(fp),
+                                    "url": "/artifact-file/" + os.path.basename(fp)}
+                except Exception:
+                    pass
+            out.append(node)
         _hist_add(sid, "U", n["subtask"])
         _hist_add(sid, "A", ans)
     return {"nodes": out, "classifier": cls, "scope": scope, "mode": body.mode,
@@ -302,6 +312,42 @@ def _audit_safe(event: str, ref: str = "") -> str:
         return _sov.audit(event, ref)
     except Exception:
         return "off"
+
+# ── Chat-to-file: "give me X as docx/pdf/pptx/xlsx" builds the file ──
+_FILE_RE = re.compile(r"\b(docx?|word|pdf|pptx?|slides?|deck|excel|xlsx|sheets?)\b", re.I)
+_FILE_ASK = re.compile(r"\b(give|export|download|make|create|save|generate|as|into|in)\b", re.I)
+
+def file_kind(subtask: str) -> str | None:
+    m = _FILE_RE.search(subtask or "")
+    if not m or not _FILE_ASK.search(subtask or ""):
+        return None
+    w = m.group(1).lower()
+    if w == "pdf":
+        return "pdf"
+    if w.startswith("ppt") or w.startswith("slide") or w == "deck":
+        return "pptx"
+    if w.startswith("doc") or w == "word":
+        return "docx"
+    return "xlsx"
+
+
+def _build_artifact(kind: str, title: str, lines: list) -> tuple:
+    import tools as _t
+    os.makedirs(ART_DIR, exist_ok=True)
+    safe = "".join(c for c in (title or "hedron")[:40] if c.isalnum() or c in (" ", "-", "_")).strip() or "hedron"
+    lines = [str(x) for x in (lines or ["—"])][:60]
+    if kind == "xlsx":
+        rows = [[l] if l.startswith("=") else [l] for l in lines]
+        return (_t.write_xlsx(os.path.join(ART_DIR, safe + ".xlsx"), [["content"]] + rows),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if kind == "pptx":
+        return (_t.write_pptx(os.path.join(ART_DIR, safe + ".pptx"), title, (lines + [""] * 6)[:6]),
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+    if kind == "pdf":
+        return (_t.write_pdf(os.path.join(ART_DIR, safe + ".pdf"), title, lines), "application/pdf")
+    return (_t.write_docx(os.path.join(ART_DIR, safe + ".docx"), title, lines),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
 
 @app.get("/")
 def ui():
@@ -356,21 +402,19 @@ def session_hist(sid: str):
 
 @app.post("/artifact")
 def artifact(body: ArtifactIn):
-    import tools as _t
-    os.makedirs(ART_DIR, exist_ok=True)
-    safe = "".join(c for c in body.title[:40] if c.isalnum() or c in (" ", "-", "_")).strip() or "hedron"
-    lines = [str(x) for x in (body.lines or ["—"])][:60]
-    if body.kind == "xlsx":
-        rows = [[l] if l.startswith("=") else [l] for l in lines]
-        path = _t.write_xlsx(os.path.join(ART_DIR, safe + ".xlsx"), [["content"]] + rows)
-        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    elif body.kind == "pptx":
-        path = _t.write_pptx(os.path.join(ART_DIR, safe + ".pptx"), body.title, (lines + [""] * 6)[:6])
-        media = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    else:
-        path = _t.write_docx(os.path.join(ART_DIR, safe + ".docx"), body.title, lines)
-        media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    path, media = _build_artifact(body.kind, body.title, body.lines)
     return FileResponse(path, media_type=media, filename=os.path.basename(path))
+
+
+@app.get("/artifact-file/{name}")
+def artifact_file(name: str):
+    safe = os.path.basename(name or "")
+    if not safe.endswith((".docx", ".pdf", ".pptx", ".xlsx")):
+        return {"ok": False, "error": "unknown file"}
+    path = os.path.join(ART_DIR, safe)
+    if not os.path.exists(path):
+        return {"ok": False, "error": "not found"}
+    return FileResponse(path, filename=safe)
 
 
 @app.get("/proof")

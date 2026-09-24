@@ -47,6 +47,28 @@ def write_docx(path: str, title: str, paras: list, style: str = "default") -> st
     d.save(path)
     return path
 
+def write_pdf(path: str, title: str, paras: list) -> str:
+    import os
+    import textwrap
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    c = canvas.Canvas(path, pagesize=A4)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(56, 780, title[:80])
+    c.setFont("Helvetica", 11)
+    y = 750
+    for p in paras:
+        for line in textwrap.wrap(str(p), 100) or [""]:
+            c.drawString(56, y, line)
+            y -= 15
+            if y < 60:
+                c.showPage()
+                c.setFont("Helvetica", 11)
+                y = 780
+    c.save()
+    return path
+
 def verify(answer: str, cites: list, xlsx_path: str | None = None,
            need_cites: bool = False, max_chars: int = 2000) -> dict:
     """Release gate: cites≥1 (when required), recalc 0, overflow cap."""
