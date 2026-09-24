@@ -15,7 +15,7 @@ COLL = "vault"
 EMBED_MODEL = "nomic-embed-text"
 MAX_CHARS = 800  # one chunk ≈ one heading section, fits 4K ctx even x3
 
-_coll = None  # lazy Chroma collection
+_COLL = None  # lazy Chroma collection (name kept distinct from _coll())
 
 
 def init():
@@ -71,15 +71,15 @@ def _embed(texts: list) -> list | None:
 
 
 def _coll():
-    global _coll
-    if _coll is not None:
-        return _coll
+    global _COLL
+    if _COLL is not None:
+        return _COLL
     if not HAS_CHROMA:
         return None
     try:
         from chromadb import PersistentClient
-        _coll = PersistentClient(path=CHROMA_DIR).get_or_create_collection(COLL)
-        return _coll
+        _COLL = PersistentClient(path=CHROMA_DIR).get_or_create_collection(COLL)
+        return _COLL
     except Exception:
         return None
 

@@ -61,6 +61,78 @@ class ChatIn(BaseModel):
     model: str = "Auto"
     files: int = 0          # attached file count
     template: str = "Ask"   # Ask | Yes — My-SOP-Note | No — Auto style
+    session_id: str = "default"
+
+# ── S1. Sessions: isolated bounded memory (no rot, no cross-talk) ────
+_SESS = {}  # sid -> {"title": str, "hist": [(role, text)]}
+HIST_TURNS = 6
+HIST_CHARS = 1500
+
+def _sess(sid: str) -> dict:
+    sid = (sid or "default")[:40]
+    return _SESS.setdefault(sid, {"title": sid, "hist": []})
+
+def _hist_text(sid: str) -> str:
+    h = _sess(sid)["hist"][-HIST_TURNS:]
+    t = "\n".join(("%s: %s" % (r, x[:400])) for r, x in h)
+    return t[-HIST_CHARS:] if len(t) > HIST_CHARS else t
+
+def _hist_add(sid: str, role: str, text: str):
+    s = _sess(sid)
+    if s["title"] == sid and role == "U":
+        s["title"] = text[:40]
+    s["hist"].append((role, (text or "")[:500]))
+
+# ── S3. Genome: tag-matched operating rules, loaded once ─────────────
+_GENOME = []
+try:
+    _GENOME = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "genome_frozen.json"), encoding="utf-8")).get("genes", [])
+except Exception:
+    pass
+
+def genes_for(reason: str) -> str:
+    r = (reason or "").lower()
+    want = "code" if "code" in r or "tool" in r else ("docs" if ("doc" in r or "cit" in r) else "")
+    out = [g["body"] for g in _GENOME if want and want in g.get("tags", [])][:3]
+    return ("Operating rules:\n- " + "\n- ".join(o[:200] for o in out) + "\n") if out else ""
+
+# ── S2. OCR + vision pixels ──────────────────────────────────────────
+_TESS = os.environ.get("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+
+def ocr_image(path: str) -> str:
+    try:
+        import pytesseract
+        from PIL import Image, ImageOps
+        if os.path.exists(_TESS):
+            pytesseract.pytesseract.tesseract_cmd = _TESS
+        im = Image.open(path).convert("L")
+        im = ImageOps.autocontrast(ImageOps.expand(im, 20).resize((im.width * 2, im.height * 2)))
+        return (pytesseract.image_to_string(im) or "").strip()[:1500]
+    except Exception:
+        return ""
+
+def find_images(subtask: str) -> list:
+    out = []
+    for tok in subtask.replace(",", " ").split():
+        t = tok.strip("()\"'").lower()
+        if t.endswith((".png", ".jpg", ".jpeg")):
+            p = os.path.join(SOPS_DIR, os.path.basename(t))
+            if os.path.exists(p):
+                out.append(p)
+    return out[:2]
+
+def vision_bytes(path: str) -> bytes | None:
+    try:
+        import io
+        from PIL import Image
+        im = Image.open(path).convert("RGB")
+        im.thumbnail((1568, 1568))
+        b = io.BytesIO()
+        im.save(b, "JPEG", quality=88)
+        return b.getvalue()
+    except Exception:
+        return None
 
 class ArtifactIn(BaseModel):
     kind: str = "docx"      # docx | xlsx | pptx
@@ -103,8 +175,10 @@ def route_node(subtask: str) -> dict:
 
 def decompose(prompt: str) -> list:
     """Split prompt into nodes; each node routed separately."""
-    parts = [s.strip() for s in prompt.replace(" then ", ".").replace(" and ", ".").split(".") if s.strip()]
-    return parts[:4] or [prompt]
+    guard = prompt.replace(".png", "\x00p").replace(".jpg", "\x00j").replace(".jpeg", "\x00e")
+    parts = [s.strip() for s in guard.replace(" then ", ".").replace(" and ", ".").split(".") if s.strip()]
+    return [p.replace("\x00p", ".png").replace("\x00j", ".jpg").replace("\x00e", ".jpeg")
+            for p in parts[:4]] or [prompt]
 
 # ── 3. LRU resident guard ──────────────────────────────────────────────
 def ensure_resident(model: str):
@@ -129,28 +203,30 @@ def unload_all():
 
 
 # ── 4. Generate (real Ollama, OOM retry, offline cache, mock fallback) ──
-def _ollama_chat(model: str, prompt: str) -> str:
+def _ollama_chat(model: str, prompt: str, images: list | None = None) -> str:
     import ollama
     opts = {"num_ctx": NUM_CTX, "num_predict": 256}
     if os.environ.get("HEDRON_FORCE_CPU", "0") == "1":
         opts["num_gpu"] = 0  # ponytail: venue iGPU fallback, slow but alive
-    r = ollama.chat(model=MODEL_TAGS[model], messages=[{"role": "user", "content": prompt[:3000]}],
-                    options=opts, keep_alive="5m")
+    msg = {"role": "user", "content": prompt[:3000]}
+    if images:
+        msg["images"] = images
+    r = ollama.chat(model=MODEL_TAGS[model], messages=[msg], options=opts, keep_alive="5m")
     msg = r["message"]
     text = msg.get("content") or msg.get("thinking", "")
     return text if text else "[empty reply]"
 
 
-def generate(model: str, prompt: str) -> str:
+def generate(model: str, prompt: str, images: list | None = None) -> str:
     ensure_resident(model)
     try:
-        ans = _ollama_chat(model, prompt)
+        ans = _ollama_chat(model, prompt, images)
     except Exception as e:
         if "memory" in str(e).lower():  # OOM: drop everything, retry once
             unload_all()
             try:
                 ensure_resident(model)
-                ans = _ollama_chat(model, prompt)
+                ans = _ollama_chat(model, prompt, images)
             except Exception:
                 ans = None
         else:
@@ -183,18 +259,41 @@ def chat(body: ChatIn):
     sop_ask = any(k in body.prompt.lower() for k in
                   ("sop", "procedure", "manual", "policy", "shutdown", "torque", "spec"))
     want_note = body.template.startswith("Yes")  # template modal Yes→which
+    sid = (body.session_id or "default")[:40]
+    hist = _hist_text(sid)
     for n in nodes[:2] if scope == "Swarm" else nodes[:1]:  # MVP Swarm = sequential, max 2
         docish = "doc" in n["router"]["reason"] or "cit" in n["router"]["reason"] or want_note
+        vision = n["router"]["model"] == "qwen2.5vl-3b"
+        imgs, ocr_txt = [], ""
+        if vision:
+            for p in find_images(n["subtask"]):
+                b = vision_bytes(p)
+                if b:
+                    imgs.append(b)
+                t = ocr_image(p)
+                if t and len(t) >= 20:
+                    ocr_txt += t[:800] + "\n"
         if docish and not hits and (sop_ask or want_note) and body.mode != "Manual":
-            out.append({**n, "answer": "not in SOP — no Vault chunk matched.", "cites": []})
+            ans = "not in SOP — no Vault chunk matched."
+            out.append({**n, "answer": ans, "cites": []})
         else:
-            q = "Vault context:\n%s\n\nQ: %s" % (ctx, n["subtask"]) if (docish and ctx) else n["subtask"]
+            q = ""
+            if docish and ctx:
+                q += "Vault context:\n%s\n\n" % ctx
+            if vision and ocr_txt:
+                q += "Pixels read (OCR):\n%s\n\n" % ocr_txt.strip()
+            if hist:
+                q += "Session so far:\n%s\n\n" % hist
+            q += genes_for(n["router"]["reason"]) + "Q: %s" % n["subtask"]
             if want_note and ctx:
                 q = "Reply as My-SOP-Note (finding, clause [doc p.X], action):\n" + q
-            out.append({**n, "answer": generate(n["router"]["model"], q),
-                        "cites": cites if docish else []})
+            ans = generate(n["router"]["model"], q, imgs or None)
+            out.append({**n, "answer": ans, "cites": cites if docish else []})
+        _hist_add(sid, "U", n["subtask"])
+        _hist_add(sid, "A", ans)
     return {"nodes": out, "classifier": cls, "scope": scope, "mode": body.mode,
-            "template": body.template, "resident": list(_resident), "num_ctx": NUM_CTX,
+            "template": body.template, "session_id": sid,
+            "resident": list(_resident), "num_ctx": NUM_CTX,
             "audit": _audit_safe("chat", "%s/%s" % (scope, out[0]["router"]["model"] if out else "?"))}
 
 def _audit_safe(event: str, ref: str = "") -> str:
@@ -219,7 +318,7 @@ def upload(file: UploadFile = File(...)):
     dest = os.path.join(SOPS_DIR, name)
     with open(dest, "wb") as f:
         f.write(file.file.read())
-    chunks = 0
+    chunks, ocr_chars = 0, 0
     if ext == ".pdf":
         try:
             import rag as _rag
@@ -227,7 +326,32 @@ def upload(file: UploadFile = File(...)):
             chunks = _rag.ingest_pdf(dest)
         except Exception:
             pass
-    return {"ok": True, "name": name, "chunks": chunks, "vision": ext != ".pdf"}
+    else:  # image: OCR text becomes a searchable Vault chunk
+        try:
+            import rag as _rag
+            _rag.init()
+            t = ocr_image(dest)
+            ocr_chars = len(t)
+            if len(t) >= 20:
+                chunks = _rag.ingest_chunks([{"doc": os.path.splitext(name)[0],
+                                              "page": 1, "text": t}])
+        except Exception:
+            pass
+    return {"ok": True, "name": name, "chunks": chunks, "ocr_chars": ocr_chars,
+            "vision": ext != ".pdf"}
+
+
+@app.get("/sessions")
+def sessions():
+    return {"sessions": [{"id": sid, "title": s["title"], "turns": len(s["hist"]) // 2}
+                         for sid, s in _SESS.items()]}
+
+
+@app.get("/session/{sid}")
+def session_hist(sid: str):
+    s = _sess(sid)
+    return {"id": sid[:40], "title": s["title"],
+            "history": [{"role": r, "text": t} for r, t in s["hist"][-HIST_TURNS:]]}
 
 
 @app.post("/artifact")

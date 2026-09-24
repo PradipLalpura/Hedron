@@ -76,6 +76,11 @@ footer { text-align: center; color: var(--mut); font-size: 12px; padding: 14px; 
 </header>
 <main>
   <section>
+    <div class="card"><div class="row" style="margin-top:0">
+      <button class="ghost" id="newChat">+ New chat</button>
+      <select id="sess" style="max-width:300px"></select>
+      <span class="badge" id="memBadge">memory: 0 turns</span>
+    </div></div>
     <div class="card">
       <div class="controls">
         <div><label>Mode</label><select id="mode"><option>Auto</option><option>Manual</option></select></div>
@@ -106,11 +111,50 @@ footer { text-align: center; color: var(--mut); font-size: 12px; padding: 14px; 
 <footer>Hedron MVP · localhost only · <span id="auditLine">audit: …</span></footer>
 <script>
 const $ = id => document.getElementById(id);
-let lastModel = null, lastAnswer = "", attachedFiles = 0, theme = localStorage.getItem("hedron-theme") || "dark";
+let lastModel = null, lastAnswer = "", attachedFiles = 0;
+let sid = "chat-" + Date.now().toString(36), threads = {};
+async function refreshSessions() {
+  try {
+    const s = await (await fetch("/sessions")).json();
+    const sel = $("sess"); sel.innerHTML = "";
+    s.sessions.forEach(x => {
+      const o = document.createElement("option");
+      o.value = x.id; o.textContent = x.title.slice(0, 32) + " (" + x.turns + ")";
+      sel.appendChild(o);
+    });
+    if (![...sel.options].some(o => o.value === sid)) {
+      const o = document.createElement("option"); o.value = sid; o.textContent = "this chat";
+      sel.appendChild(o);
+    }
+    sel.value = sid;
+    const me = s.sessions.find(x => x.id === sid);
+    $("memBadge").textContent = "memory: " + (me ? me.turns : 0) + " turns";
+  } catch {}
+}
 document.documentElement.dataset.theme = theme;
 $("themeBtn").onclick = () => {
   theme = theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = theme;
+let theme = localStorage.getItem("hedron-theme") || "dark";
+document.documentElement.dataset.theme = theme;
+$("newChat").onclick = () => {
+  threads[sid] = $("thread").innerHTML;
+  sid = "chat-" + Date.now().toString(36);
+  $("thread").innerHTML = ""; lastModel = null; lastAnswer = "";
+  refreshSessions();
+};
+$("sess").onchange = async e => {
+  threads[sid] = $("thread").innerHTML;
+  sid = e.target.value;
+  if (threads[sid] !== undefined) { $("thread").innerHTML = threads[sid]; }
+  else {
+    try {
+      const h = await (await fetch("/session/" + encodeURIComponent(sid))).json();
+      $("thread").innerHTML = (h.history || []).map(m =>
+        `<div class="card msg-${m.role === "U" ? "u" : "a"}">${esc(m.text).replace(/\n/g, "<br>")}</div>`).join("");
+    } catch { $("thread").innerHTML = ""; }
+  }
+  lastModel = null; refreshSessions();
+};
   localStorage.setItem("hedron-theme", theme);
 };
 function toast(t) { const e = $("toast"); e.textContent = t; e.style.display = "block"; setTimeout(() => e.style.display = "none", 3500); }
@@ -137,7 +181,7 @@ $("file").onchange = async e => {
     const c = document.createElement("span"); c.className = "chip";
     c.textContent = r.name + (r.chunks ? " · " + r.chunks + " chunks" : " · vision");
     $("files").appendChild(c); $("vault").appendChild(c.cloneNode(true));
-    toast("vault: " + r.name + " ingested");
+    toast("vault: " + r.name + (r.chunks ? " · " + r.chunks + " chunk" : "") + (r.ocr_chars ? " · OCR " + r.ocr_chars + " chars" : ""));
   } catch (err) { toast("upload failed: " + err.message); }
   e.target.value = "";
 };
@@ -150,7 +194,7 @@ $("go").onclick = async () => {
     const r = await (await fetch("/chat", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: q, mode: $("mode").value, scope: $("scope").value,
-        model: $("model").value, template: $("tpl").value, files: attachedFiles }) })).json();
+        model: $("model").value, template: $("tpl").value, files: attachedFiles, session_id: sid }) })).json();
     think.remove();
     (r.nodes || []).forEach((n, i) => {
       const m = n.router.model;
@@ -165,7 +209,7 @@ $("go").onclick = async () => {
       if (i === 0) lastAnswer = n.answer;
     });
     attachedFiles = 0; $("files").innerHTML = "";
-    refreshProof();
+    refreshProof(); refreshSessions();
   } catch {
     think.remove();
     addMsg("a msg-err", "<b>backend unreachable.</b> Start it with <code>python app/server.py</code> — nothing was sent anywhere.");
@@ -183,10 +227,12 @@ $("dl").onclick = async () => {
     body: JSON.stringify({ kind, title: lastAnswer.slice(0, 40), lines: lastAnswer.split("\n").slice(0, 20) }) });
   if (!r.ok) return toast("artifact failed");
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(await r.blob()); a.download = "hedron." + kind; a.click();
+  a.href = URL.createObjectURL(await r.blob()); a.download = "hedron." + kind;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   toast("artifact downloaded");
 };
-refreshProof(); setInterval(refreshProof, 15000);
+refreshProof(); refreshSessions(); setInterval(refreshProof, 15000);
 </script>
 </body>
 </html>
