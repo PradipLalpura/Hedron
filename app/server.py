@@ -49,7 +49,7 @@ def route_node(subtask: str) -> dict:
     p = subtask.lower()
     if any(k in p for k in ("code", ".py", "calc", "fix", "function", "formula")):
         return {"model": "ornith-9b", "reason": "code/calc + tool calls"}
-    if any(k in p for k in ("scan", "photo", "image", "p&id", "drawing", "ocr")):
+    if any(k in p for k in ("scan", "photo", "image", "p&id", "drawing", "ocr", ".png", ".jpg", ".jpeg")):
         return {"model": "qwen2.5vl-3b", "reason": "vision input"}
     if any(k in p for k in ("summar", "draft", "note", "sop", "cite")):
         return {"model": "qwen-7b", "reason": "doc/summary + citations"}
