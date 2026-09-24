@@ -26,7 +26,7 @@ c1, c2 = st.columns([3, 2])
 with c1:
     st.subheader("Chat (Commander)")
     mode = st.selectbox("Mode", ["Auto", "Manual"])
-    scope = st.selectbox("Scope", ["Single", "Swarm"])
+    scope = st.selectbox("Scope", ["Auto", "Single", "Swarm"])
     model = st.selectbox("Model", ["Auto", "qwen-7b", "ornith-9b", "qwen2.5vl-3b", "qwen-3b"])
     tpl = st.selectbox("Template", ["Ask", "Yes — My-SOP-Note", "No — Auto style"])
     prompt = st.text_area("Ask...", height=100, placeholder="Extract 3 defects from scan + draft approval note")
