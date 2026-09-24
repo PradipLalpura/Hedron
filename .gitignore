@@ -1,0 +1,45 @@
+# ── Hedron: keep repo lean, local-only ──────────────────────────────
+# Ideation + research corpora stay on disk, never pushed (per owner)
+HEDRON_IDEATION.md
+HEDRON_MVP_IDEATION.md
+HEDRON_MVP_PHASES_CHANGELOG.md
+HEDRON_QA_COMPLETE.md
+RENORM_*.md
+explained.md
+tech_explained.md
+_archive/
+skills bank/
+system_prompts_leaks/
+system-prompts-and-models-of-ai-tools/
+
+# ── Models + local runtime (14GB+, machine-specific) ───────────────────
+models/
+*.gguf
+*.bin
+.ollama/
+C_hedron_models/
+
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+pip-log.txt
+
+# ── App runtime ────────────────────────────────────────────────────────
+.chroma/
+vault_store/
+uploads/
+demo_backup/*.mp4
+*.hctx
+*.ndjson
+app/sops/*.pdf
+!app/sops/.gitkeep
+
+# ── OS / IDE ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
