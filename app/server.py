@@ -95,8 +95,23 @@ def chat(body: ChatIn):
         subs = decompose(body.prompt) if scope == "Swarm" else [body.prompt]
         nodes = [{"subtask": s, "router": route_node(s)} for s in subs]
     out = []
+    try:
+        import rag as _rag
+        _rag.init()
+        ctx, hits = _rag.context_for(body.prompt)
+        cites = [_rag.cite(h) for h in hits]
+    except Exception:
+        ctx, hits, cites = None, [], []
+    sop_ask = any(k in body.prompt.lower() for k in
+                  ("sop", "procedure", "manual", "policy", "shutdown", "torque", "spec"))
     for n in nodes[:2] if scope == "Swarm" else nodes[:1]:  # MVP Swarm = sequential, max 2
-        out.append({**n, "answer": generate(n["router"]["model"], n["subtask"])})
+        docish = "doc" in n["router"]["reason"] or "cit" in n["router"]["reason"]
+        if docish and not hits and sop_ask and body.mode != "Manual":
+            out.append({**n, "answer": "not in SOP — no Vault chunk matched.", "cites": []})
+        else:
+            q = "Vault context:\n%s\n\nQ: %s" % (ctx, n["subtask"]) if (docish and ctx) else n["subtask"]
+            out.append({**n, "answer": generate(n["router"]["model"], q),
+                        "cites": cites if docish else []})
     return {"nodes": out, "classifier": cls, "scope": scope, "mode": body.mode,
             "resident": list(_resident), "num_ctx": NUM_CTX}
 

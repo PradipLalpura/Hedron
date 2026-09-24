@@ -19,7 +19,10 @@ def net_status() -> dict:
 def audit(event: str, ref: str = "") -> str:
     import os
     os.makedirs("vault_store", exist_ok=True)
-    h = hashlib.blake3(f"{time.time()}{event}{ref}".encode()).hexdigest()[:16]
+    try:
+        h = hashlib.blake3(f"{time.time()}{event}{ref}".encode()).hexdigest()[:16]
+    except AttributeError:  # ponytail: stdlib has no blake3; sha256 fallback
+        h = hashlib.sha256(f"{time.time()}{event}{ref}".encode()).hexdigest()[:16]
     with open(AUDIT, "a") as f:
         f.write('{"t": %d, "event": "%s", "hash": "%s"}\n' % (int(time.time()), event, h))
     return h
