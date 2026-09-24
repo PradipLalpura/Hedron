@@ -23,6 +23,31 @@ def write_docx(path: str, title: str, paras: list) -> str:
     d.save(path)
     return path
 
+def verify(answer: str, cites: list, xlsx_path: str | None = None,
+           need_cites: bool = False, max_chars: int = 2000) -> dict:
+    """Release gate: cites≥1 (when required), recalc 0, overflow cap."""
+    checks = {}
+    checks["cites"] = (len(cites or []) >= 1) if need_cites else True
+    checks["overflow"] = len(answer or "") <= max_chars
+    checks["recalc"] = True
+    if xlsx_path:
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(xlsx_path, data_only=False)
+            bad = 0
+            for ws in wb.worksheets:
+                for row in ws.iter_rows():
+                    for c in row:
+                        v = c.value
+                        if isinstance(v, str) and v.startswith("="):
+                            if "[" in v or "#REF!" in v or "#NAME?" in v:
+                                bad += 1  # external link or broken ref
+            checks["recalc"] = bad == 0
+        except Exception:
+            checks["recalc"] = False
+    ok = all(checks.values())
+    return {"ok": ok, "checks": checks}
+
 def write_xlsx(path: str, rows: list) -> str:
     import os
     from openpyxl import Workbook

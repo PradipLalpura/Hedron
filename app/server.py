@@ -25,6 +25,7 @@ class ChatIn(BaseModel):
     scope: str = "Auto"    # Auto | Single | Swarm
     model: str = "Auto"
     files: int = 0          # attached file count
+    template: str = "Ask"   # Ask | Yes — My-SOP-Note | No — Auto style
 
 # ── 1. Score classifier 0-100 ──────────────────────────────────────────
 def classify(prompt: str, n_files: int) -> dict:
@@ -104,16 +105,19 @@ def chat(body: ChatIn):
         ctx, hits, cites = None, [], []
     sop_ask = any(k in body.prompt.lower() for k in
                   ("sop", "procedure", "manual", "policy", "shutdown", "torque", "spec"))
+    want_note = body.template.startswith("Yes")  # template modal Yes→which
     for n in nodes[:2] if scope == "Swarm" else nodes[:1]:  # MVP Swarm = sequential, max 2
-        docish = "doc" in n["router"]["reason"] or "cit" in n["router"]["reason"]
-        if docish and not hits and sop_ask and body.mode != "Manual":
+        docish = "doc" in n["router"]["reason"] or "cit" in n["router"]["reason"] or want_note
+        if docish and not hits and (sop_ask or want_note) and body.mode != "Manual":
             out.append({**n, "answer": "not in SOP — no Vault chunk matched.", "cites": []})
         else:
             q = "Vault context:\n%s\n\nQ: %s" % (ctx, n["subtask"]) if (docish and ctx) else n["subtask"]
+            if want_note and ctx:
+                q = "Reply as My-SOP-Note (finding, clause [doc p.X], action):\n" + q
             out.append({**n, "answer": generate(n["router"]["model"], q),
                         "cites": cites if docish else []})
     return {"nodes": out, "classifier": cls, "scope": scope, "mode": body.mode,
-            "resident": list(_resident), "num_ctx": NUM_CTX}
+            "template": body.template, "resident": list(_resident), "num_ctx": NUM_CTX}
 
 @app.get("/proof")
 def proof():
