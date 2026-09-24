@@ -119,7 +119,29 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch {} }
 };
 let backendUp = false;
-let lastModel = null, lastAnswer = "", attachedFiles = 0;
+let lastModel = null, lastAnswer = "", attachedFiles = 0, attachedNames = [];
+async function downloadUrl(url, name) {
+  downloadBlob(await (await fetch(url)).blob(), name);
+}
+async function downloadBlob(blob, name) {
+  if (window.pywebview) {
+    const b64 = await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(",")[1]);
+      fr.readAsDataURL(blob);
+    });
+    try {
+      const p = await window.pywebview.api.save_file(name, b64);
+      toast(p ? (String(p).startsWith("error") ? p : "saved: " + p) : "save cancelled");
+    } catch { toast("save failed"); }
+  } else {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast("downloaded: " + name);
+  }
+}
 let sid = "chat-" + Date.now().toString(36), threads = {};
 async function refreshSessions() {
   try {
@@ -190,6 +212,7 @@ $("file").onchange = async e => {
     const r = await (await fetch("/upload", { method: "POST", body: fd })).json();
     if (!r.ok) throw new Error(r.error || "rejected");
     attachedFiles++;
+    attachedNames.push(r.name);
     const c = document.createElement("span"); c.className = "chip";
     c.textContent = r.name + (r.chunks ? " · " + r.chunks + " chunks" : " · vision");
     $("files").appendChild(c); $("vault").appendChild(c.cloneNode(true));
@@ -206,7 +229,7 @@ $("go").onclick = async () => {
     const r = await (await fetch("/chat", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: q, mode: $("mode").value, scope: $("scope").value,
-        model: $("model").value, template: $("tpl").value, files: attachedFiles, session_id: sid }) })).json();
+        model: $("model").value, template: $("tpl").value, files: attachedFiles, filenames: attachedNames, session_id: sid }) })).json();
     think.remove();
     (r.nodes || []).forEach((n, i) => {
       const m = n.router.model;
@@ -218,10 +241,10 @@ $("go").onclick = async () => {
         `<span class="badge">node ${i + 1} · ${esc(r.scope)} · score ${r.classifier.score}</span>` +
         `<span class="badge model">routed: ${esc(m)} · ${esc(n.router.reason)}</span><br><br>` +
         esc(n.answer).replace(/\n/g, "<br>") + (cites ? "<br>" + cites : "") +
-        (n.file ? `<br><a class="ghost" style="display:inline-block;margin-top:8px;text-decoration:none" href="${n.file.url}" download="${esc(n.file.name)}">download ${esc(n.file.name)}</a>` : ""));
+        (n.file ? `<br><button class="ghost" style="margin-top:8px" data-url="${n.file.url}" data-name="${esc(n.file.name)}" onclick="downloadUrl(this.dataset.url,this.dataset.name)">download ${esc(n.file.name)}</button>` : ""));
       if (i === 0) lastAnswer = n.answer;
     });
-    attachedFiles = 0; $("files").innerHTML = "";
+    attachedFiles = 0; attachedNames = []; $("files").innerHTML = "";
     refreshProof(); refreshSessions();
   } catch {
     think.remove();
@@ -239,11 +262,7 @@ $("dl").onclick = async () => {
   const r = await fetch("/artifact", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind, title: lastAnswer.slice(0, 40), lines: lastAnswer.split("\n").slice(0, 20) }) });
   if (!r.ok) return toast("artifact failed");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(await r.blob()); a.download = "hedron." + kind;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  toast("artifact downloaded");
+  downloadBlob(await r.blob(), "hedron." + kind);
 };
 refreshProof(); refreshSessions(); setInterval(refreshProof, 15000);
 </script>

@@ -63,6 +63,7 @@ class ChatIn(BaseModel):
     files: int = 0          # attached file count
     template: str = "Ask"   # Ask | Yes — My-SOP-Note | No — Auto style
     session_id: str = "default"
+    filenames: list = []    # exact names attached in UI this turn
 
 # ── S1. Sessions: isolated bounded memory (no rot, no cross-talk) ────
 _SESS = {}  # sid -> {"title": str, "hist": [(role, text)]}
@@ -170,16 +171,50 @@ def route_node(subtask: str) -> dict:
         return {"model": "ornith-9b", "reason": "code/calc + tool calls"}
     if any(k in p for k in ("scan", "photo", "image", "p&id", "drawing", "ocr", ".png", ".jpg", ".jpeg")):
         return {"model": "qwen2.5vl-3b", "reason": "vision input"}
-    if any(k in p for k in ("summar", "draft", "note", "sop", "cite")):
+    if any(k in p for k in ("summar", "draft", "note", "sop", "cite", "research")):
         return {"model": "qwen-7b", "reason": "doc/summary + citations"}
     return {"model": "qwen-7b", "reason": "default doc brain"}
 
+_EXTS = (".png", ".jpg", ".jpeg", ".pdf", ".docx", ".pptx", ".xlsx")
+
 def decompose(prompt: str) -> list:
-    """Split prompt into nodes; each node routed separately."""
-    guard = prompt.replace(".png", "\x00p").replace(".jpg", "\x00j").replace(".jpeg", "\x00e")
+    """Split prompt into nodes; filenames survive the split."""
+    guard, tags = prompt, {}
+    for i, e in enumerate(_EXTS):
+        tags["\x00%d" % i] = e
+        guard = guard.replace(e, "\x00%d" % i)
     parts = [s.strip() for s in guard.replace(" then ", ".").replace(" and ", ".").split(".") if s.strip()]
-    return [p.replace("\x00p", ".png").replace("\x00j", ".jpg").replace("\x00e", ".jpeg")
-            for p in parts[:4]] or [prompt]
+    out = []
+    for p in parts[:4]:
+        for k, e in tags.items():
+            p = p.replace(k, e)
+        out.append(p)
+    return out or [prompt]
+
+
+def mentioned_files(prompt: str) -> list:
+    """Vault filenames named exactly (case-insensitive) in the prompt."""
+    try:
+        files = os.listdir(SOPS_DIR)
+    except Exception:
+        return []
+    p = (prompt or "").lower()
+    return [f for f in files
+            if f.lower() in p and os.path.isfile(os.path.join(SOPS_DIR, f))][:4]
+
+
+def named_chunks(names: list, k: int = 3) -> list:
+    """Exact-name grounding: chunks whose doc == filename stem. Nothing else."""
+    import rag as _rag
+    out = []
+    for n in (names or [])[:4]:
+        stem = os.path.splitext(os.path.basename(str(n)))[0]
+        if stem:
+            try:
+                out += _rag.chunks_of(stem, k)
+            except Exception:
+                pass
+    return out
 
 # ── 3. LRU resident guard ──────────────────────────────────────────────
 def ensure_resident(model: str):
@@ -249,14 +284,34 @@ def chat(body: ChatIn):
     else:
         subs = decompose(body.prompt) if scope == "Swarm" else [body.prompt]
         nodes = [{"subtask": s, "router": route_node(s)} for s in subs]
+    if scope == "Swarm" and len(nodes) == 1 and body.mode != "Manual":
+        base = nodes[0]["subtask"]  # forced Swarm, one task → research + build fan-out
+        nodes = [{"subtask": "Research (cite [doc p.X] sources): " + base,
+                  "router": {"model": "qwen-7b", "reason": "swarm research + cites"}},
+                 {"subtask": "Build (produce the deliverable): " + base,
+                  "router": {"model": "ornith-9b", "reason": "swarm build + tools"}}]
     out = []
+    names = []
+    for n_ in (body.filenames or []) + mentioned_files(body.prompt):
+        if n_.lower() not in [x.lower() for x in names]:
+            names.append(n_)
+    named = named_chunks(names) if names else []
+    _rag = None
     try:
-        import rag as _rag
-        _rag.init()
-        ctx, hits = _rag.context_for(body.prompt)
-        cites = [_rag.cite(h) for h in hits]
+        import rag as _r
+        _r.init()
+        ctx, hits = _r.context_for(body.prompt)
+        cites = [_r.cite(h) for h in hits]
+        _rag = _r
     except Exception:
         ctx, hits, cites = None, [], []
+    if named:  # exact names win over global search; nothing else grounds files
+        gh = named
+        gc = [_rag.cite(h) for h in named] if _rag else []
+        gctx = "\n".join("%s %s" % ((_rag.cite(h) if _rag else "[%s]" % h["doc"]), h["text"][:600])
+                         for h in named)
+    else:
+        gh, gc, gctx = hits, cites, ctx
     sop_ask = any(k in body.prompt.lower() for k in
                   ("sop", "procedure", "manual", "policy", "shutdown", "torque", "spec"))
     want_note = body.template.startswith("Yes")  # template modal Yes→which
@@ -274,22 +329,24 @@ def chat(body: ChatIn):
                 t = ocr_image(p)
                 if t and len(t) >= 20:
                     ocr_txt += t[:800] + "\n"
-        if docish and not hits and (sop_ask or want_note) and body.mode != "Manual":
+        if docish and not gh and (sop_ask or want_note) and body.mode != "Manual":
             ans = "not in SOP — no Vault chunk matched."
             out.append({**n, "answer": ans, "cites": []})
         else:
             q = ""
-            if docish and ctx:
-                q += "Vault context:\n%s\n\n" % ctx
+            if docish and gctx:
+                q += "Vault context:\n%s\n\n" % gctx
             if vision and ocr_txt:
                 q += "Pixels read (OCR):\n%s\n\n" % ocr_txt.strip()
             if hist:
                 q += "Session so far:\n%s\n\n" % hist
             q += genes_for(n["router"]["reason"]) + "Q: %s" % n["subtask"]
-            if want_note and ctx:
+            if names:
+                q = "Attached files this turn: %s\n" % ", ".join(names) + q
+            if want_note and gctx:
                 q = "Reply as My-SOP-Note (finding, clause [doc p.X], action):\n" + q
             ans = generate(n["router"]["model"], q, imgs or None)
-            node = {**n, "answer": ans, "cites": cites if docish else []}
+            node = {**n, "answer": ans, "cites": gc if docish else []}
             fk = file_kind(n["subtask"])  # "give it as docx/pdf/pptx" → build now
             if fk and not ans.startswith("not in SOP"):
                 try:

@@ -117,6 +117,18 @@ _STOP = {"what", "is", "the", "a", "an", "of", "to", "in", "on", "per", "for",
          "and", "or", "by", "as", "at", "it", "its", "this", "that", "do", "does"}
 
 
+def chunks_of(stem: str, k: int = 3) -> list:
+    """Exact doc-name lookup (case-insensitive). File grounding primitive."""
+    try:
+        c = sqlite3.connect(DB)
+        rows = c.execute("SELECT doc, page, text FROM chunks WHERE lower(doc)=lower(?) LIMIT ?",
+                         (stem, k)).fetchall()
+        c.close()
+        return [{"doc": d, "page": p, "text": t} for d, p, t in rows]
+    except Exception:
+        return []
+
+
 def _fts(query: str, k: int) -> list:
     toks = [t for t in re.findall(r"[A-Za-z0-9]+", query)
             if len(t) > 2 and t.lower() not in _STOP]  # MATCH-safe, question-tolerant
