@@ -1,4 +1,7 @@
-"""Hedron MVP backend — FastAPI, localhost only. Phase 1: classifier + per-node router + LRU + 4K ctx."""
+"""Hedron MVP backend — FastAPI, localhost only. Phase 5: OOM retry + offline cache + FORCE_CPU."""
+import hashlib
+import json
+import os
 import subprocess
 import time
 from collections import deque
@@ -9,8 +12,39 @@ app = FastAPI(title="hedron-mvp")
 
 OLLAMA_BIN = "ollama"
 NUM_CTX = 4096  # frozen: fits 6GB VRAM with 7B Q4
-RESIDENT_CAP = 2  # max models in VRAM; 1 on 6GB Swarm-sequential
+RESIDENT_CAP = int(os.environ.get("HEDRON_RESIDENT_CAP", "2"))  # venueOverride: 1 if OOM
+CACHE_PATH = "vault_store/offline_cache.json"
+CACHE_MAX = 200
 _resident = deque()  # LRU: left=oldest
+_cache = None
+
+
+def _cache_load() -> dict:
+    global _cache
+    if _cache is None:
+        try:
+            with open(CACHE_PATH, encoding="utf-8") as f:
+                _cache = json.load(f)
+        except Exception:
+            _cache = {}
+    return _cache
+
+
+def _cache_get(model: str, prompt: str):
+    return _cache_load().get(hashlib.sha256((model + prompt[:1500]).encode()).hexdigest())
+
+
+def _cache_put(model: str, prompt: str, answer: str):
+    c = _cache_load()
+    c[hashlib.sha256((model + prompt[:1500]).encode()).hexdigest()] = answer[:2000]
+    while len(c) > CACHE_MAX:
+        c.pop(next(iter(c)))
+    try:
+        os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+        with open(CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(c, f)
+    except Exception:
+        pass
 
 MODEL_TAGS = {
     "qwen-7b": "qwen2.5:7b",
@@ -73,18 +107,50 @@ def ensure_resident(model: str):
         except Exception:
             pass
 
-# ── 4. Generate (real Ollama, mock fallback) ───────────────────────────
+def unload_all():
+    """Stop every resident model. OOM escape hatch."""
+    while _resident:
+        old = _resident.popleft()
+        try:
+            subprocess.run([OLLAMA_BIN, "stop", MODEL_TAGS[old]], capture_output=True, timeout=20)
+        except Exception:
+            pass
+
+
+# ── 4. Generate (real Ollama, OOM retry, offline cache, mock fallback) ──
+def _ollama_chat(model: str, prompt: str) -> str:
+    import ollama
+    opts = {"num_ctx": NUM_CTX, "num_predict": 256}
+    if os.environ.get("HEDRON_FORCE_CPU", "0") == "1":
+        opts["num_gpu"] = 0  # ponytail: venue iGPU fallback, slow but alive
+    r = ollama.chat(model=MODEL_TAGS[model], messages=[{"role": "user", "content": prompt[:3000]}],
+                    options=opts, keep_alive="5m")
+    msg = r["message"]
+    text = msg.get("content") or msg.get("thinking", "")
+    return text if text else "[empty reply]"
+
+
 def generate(model: str, prompt: str) -> str:
     ensure_resident(model)
     try:
-        import ollama
-        r = ollama.chat(model=MODEL_TAGS[model], messages=[{"role": "user", "content": prompt[:3000]}],
-                        options={"num_ctx": NUM_CTX, "num_predict": 256}, keep_alive="5m")
-        msg = r["message"]
-        text = msg.get("content") or msg.get("thinking", "")
-        return text if text else "[empty reply]"
+        ans = _ollama_chat(model, prompt)
     except Exception as e:
-        return "[mock:%s] %s" % (model, prompt[:120])
+        if "memory" in str(e).lower():  # OOM: drop everything, retry once
+            unload_all()
+            try:
+                ensure_resident(model)
+                ans = _ollama_chat(model, prompt)
+            except Exception:
+                ans = None
+        else:
+            ans = None
+        if ans is None:
+            hit = _cache_get(model, prompt)
+            if hit is not None:
+                return "[cached] " + hit  # OFFLINE: last good answer
+            return "[mock:%s] %s" % (model, prompt[:120])
+    _cache_put(model, prompt, ans)
+    return ans
 
 @app.post("/chat")
 def chat(body: ChatIn):

@@ -12,6 +12,8 @@ set OLLAMA_HOST=127.0.0.1:11434
 set OLLAMA_KEEP_ALIVE=5m
 set OLLAMA_NUM_CTX=4096
 set OLLAMA_FLASH_ATTENTION=1
+set HEDRON_RESIDENT_CAP=2
+REM venue fallback if OOM: set HEDRON_FORCE_CPU=1 (CPU-only, slow but alive)
 start /min "%DRIVE%\hedron\bin\ollama.exe" serve
 timeout /t 6 >nul
 "%DRIVE%\hedron\bin\ollama.exe" list
