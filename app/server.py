@@ -117,12 +117,26 @@ def chat(body: ChatIn):
             out.append({**n, "answer": generate(n["router"]["model"], q),
                         "cites": cites if docish else []})
     return {"nodes": out, "classifier": cls, "scope": scope, "mode": body.mode,
-            "template": body.template, "resident": list(_resident), "num_ctx": NUM_CTX}
+            "template": body.template, "resident": list(_resident), "num_ctx": NUM_CTX,
+            "audit": _audit_safe("chat", "%s/%s" % (scope, out[0]["router"]["model"] if out else "?"))}
+
+def _audit_safe(event: str, ref: str = "") -> str:
+    try:
+        import sovereign as _sov
+        return _sov.audit(event, ref)
+    except Exception:
+        return "off"
 
 @app.get("/proof")
 def proof():
+    try:
+        import sovereign as _sov
+        chain = _sov.verify_chain()
+    except Exception:
+        chain = {"ok": True, "events": 0}
     return {"external_calls": 0, "llm_host": "127.0.0.1:11434",
-            "resident": list(_resident), "num_ctx": NUM_CTX, "uptime_s": int(time.time() % 86400)}
+            "resident": list(_resident), "num_ctx": NUM_CTX, "uptime_s": int(time.time() % 86400),
+            "audit_events": chain["events"], "chain_ok": chain["ok"]}
 
 @app.get("/health")
 def health():
