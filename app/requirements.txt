@@ -18,3 +18,5 @@ pytesseract==0.3.*
 psutil==6.*
 httpx==0.27.*
 ollama==0.3.*
+# Desktop shell (native window, still 100% local)
+pywebview==5.*

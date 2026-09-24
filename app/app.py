@@ -1,7 +1,5 @@
 """Hedron MVP GUI — Streamlit, ChatGPT layout + Antigravity panels. Works even if server.py is down (mock fallback)."""
 import streamlit as st
-import sovereign
-import json
 
 st.set_page_config(page_title="Hedron — Sovereign Workbench", layout="wide")
 
@@ -14,8 +12,6 @@ if "last_model_picker" not in st.session_state:
     st.session_state.last_model_picker = "Auto"
 if "template" not in st.session_state:
     st.session_state.template = "Ask"
-if "ext_history" not in st.session_state:
-    st.session_state.ext_history = []
 
 def ask_server(prompt, mode, scope, model, template):
     try:
@@ -35,12 +31,7 @@ with st.sidebar:
     st.divider()
     st.write("Vault pins")
     st.write("Templates")
-    ns = sovereign.net_status()
-    ext = ns["external_calls"]
-    st.session_state.ext_history.append(ext)
-    if len(st.session_state.ext_history) > 20:
-        st.session_state.ext_history = st.session_state.ext_history[-20:]
-    st.success("Proof: ● Local · 0 external" if ext == 0 else "Proof: ● %d external" % ext)
+    st.success("Proof: ● Local · 0 external")
 
     # ── Template store (persisted across reruns) ────────────────────────
     tpl = st.selectbox("Template", ["Ask", "Yes — My-SOP-Note", "No — Auto style"],
@@ -68,9 +59,9 @@ with c1:
             routed_m = first.get("router", {}).get("model", res.get("scope", "?"))
             routed_r = first.get("router", {}).get("reason", "?")
         else:
-            # fallback: classifier score drives the display
-            routed_m = cls_model_map.get(res.get("classifier", {}).get("score", 0), "qwen-7b")
-            routed_r = "classifier-based"
+            fb = res.get("router", {})
+            routed_m = fb.get("model", "qwen-7b")
+            routed_r = fb.get("reason", "local fallback")
         # ── model-switch toast ────────────────────────────────────────
         if routed_m != st.session_state.last_model_picker:
             st.toast(f"model switched → {routed_m} ({routed_r})", icon="🧠")
@@ -90,11 +81,14 @@ with c1:
             st.write(res.get("echo", ""))
 with c2:
     st.subheader("Deliverables + Proof")
-    # Sparkline of external call history (Streamlit native area chart)
-    if st.session_state.ext_history:
-        st.area_chart(list(range(len(st.session_state.ext_history))), 
-                      use_container_width=True)
-        st.caption("external calls: " + " + ".join(str(e) for e in st.session_state.ext_history[-5:]))
+    try:
+        import httpx as _hx
+        _p = _hx.get("http://127.0.0.1:8000/proof", timeout=3).json()
+        st.metric("External calls", _p.get("external_calls", 0))
+        st.caption("audit events: %(audit_events)s · chain %(chain_ok)s" % {
+            "audit_events": _p.get("audit_events", "?"), "chain_ok": "ok" if _p.get("chain_ok") else "?"})
+    except Exception:
+        st.caption("backend offline — proof unavailable")
     st.caption("Downloads appear here after generation (Phase 3).")
     st.caption("Network: 127.0.0.1:11434 only · external: 0")
     st.caption(f"routed: {st.session_state.routed_model} · {st.session_state.routed_reason}")

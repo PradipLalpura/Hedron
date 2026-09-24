@@ -122,9 +122,10 @@ def write_pptx(path: str, title: str, bullets: list) -> str:
             if bi < len(bullets) and bullets[bi]:
                 p = tf.add_paragraph()
                 p.text = bullets[bi]
-    # Closing slide
-    slide = prs.slides.add_slide(prs.slide_layouts[5])  # thank you/layout
+    # Closing slide (same Title+Content layout; blank layouts carry no placeholders)
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Thank you"
     tf = slide.shapes.placeholders[1].text_frame
-    tf.text = "Thank you\nHedron MVP — " + __import__("datetime").datetime.now().strftime("%b %Y")
+    tf.text = "Hedron MVP — " + __import__("datetime").datetime.now().strftime("%b %Y")
     prs.save(path)
     return path

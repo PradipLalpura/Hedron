@@ -5,7 +5,8 @@ import os
 import subprocess
 import time
 from collections import deque
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="hedron-mvp")
@@ -60,6 +61,16 @@ class ChatIn(BaseModel):
     model: str = "Auto"
     files: int = 0          # attached file count
     template: str = "Ask"   # Ask | Yes — My-SOP-Note | No — Auto style
+
+class ArtifactIn(BaseModel):
+    kind: str = "docx"      # docx | xlsx | pptx
+    title: str = "Hedron note"
+    lines: list = []
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+UI_PATH = os.path.join(_HERE, "ui.html")
+SOPS_DIR = os.path.join(_HERE, "sops")
+ART_DIR = os.path.join(_HERE, "..", "vault_store", "artifacts")
 
 # ── 1. Score classifier 0-100 ──────────────────────────────────────────
 def classify(prompt: str, n_files: int) -> dict:
@@ -192,6 +203,51 @@ def _audit_safe(event: str, ref: str = "") -> str:
         return _sov.audit(event, ref)
     except Exception:
         return "off"
+
+@app.get("/")
+def ui():
+    return FileResponse(UI_PATH, media_type="text/html") if os.path.exists(UI_PATH) else {"ui": "missing"}
+
+
+@app.post("/upload")
+def upload(file: UploadFile = File(...)):
+    name = os.path.basename(file.filename or "upload.bin")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in (".pdf", ".png", ".jpg", ".jpeg"):
+        return {"ok": False, "error": "pdf/png/jpg only"}
+    os.makedirs(SOPS_DIR, exist_ok=True)
+    dest = os.path.join(SOPS_DIR, name)
+    with open(dest, "wb") as f:
+        f.write(file.file.read())
+    chunks = 0
+    if ext == ".pdf":
+        try:
+            import rag as _rag
+            _rag.init()
+            chunks = _rag.ingest_pdf(dest)
+        except Exception:
+            pass
+    return {"ok": True, "name": name, "chunks": chunks, "vision": ext != ".pdf"}
+
+
+@app.post("/artifact")
+def artifact(body: ArtifactIn):
+    import tools as _t
+    os.makedirs(ART_DIR, exist_ok=True)
+    safe = "".join(c for c in body.title[:40] if c.isalnum() or c in (" ", "-", "_")).strip() or "hedron"
+    lines = [str(x) for x in (body.lines or ["—"])][:60]
+    if body.kind == "xlsx":
+        rows = [[l] if l.startswith("=") else [l] for l in lines]
+        path = _t.write_xlsx(os.path.join(ART_DIR, safe + ".xlsx"), [["content"]] + rows)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif body.kind == "pptx":
+        path = _t.write_pptx(os.path.join(ART_DIR, safe + ".pptx"), body.title, (lines + [""] * 6)[:6])
+        media = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    else:
+        path = _t.write_docx(os.path.join(ART_DIR, safe + ".docx"), body.title, lines)
+        media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return FileResponse(path, media_type=media, filename=os.path.basename(path))
+
 
 @app.get("/proof")
 def proof():

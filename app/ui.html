@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hedron — Sovereign Workbench</title>
+<style>
+:root, [data-theme="dark"] {
+  --bg: #0d1117; --bg2: #131926; --card: #161d2b; --line: #26304a;
+  --ink: #e8ecf3; --mut: #8b94a7; --acc: #4cc38a; --acc2: #58a6ff;
+  --warn: #e3b341; --bad: #f47067; --btn: #1f6feb; --field: #0f1522;
+  --shadow: 0 8px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg: #f4f1ea; --bg2: #ece7db; --card: #fffdf7; --line: #d8d0bd;
+  --ink: #1c1a15; --mut: #6f6a5c; --acc: #0e7a4c; --acc2: #0b4fa0;
+  --warn: #8a6100; --bad: #b3261e; --btn: #0b4fa0; --field: #ffffff;
+  --shadow: 0 8px 24px rgba(60,50,20,.14);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; }
+header { display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+  background: var(--bg2); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+.logo { font-weight: 800; letter-spacing: .18em; font-size: 17px; }
+.logo small { display: block; font-weight: 400; letter-spacing: .04em; font-size: 11px; color: var(--mut); }
+.pill { margin-left: auto; font-size: 12.5px; padding: 5px 12px; border-radius: 20px;
+  border: 1px solid var(--acc); color: var(--acc); white-space: nowrap; }
+#themeBtn { cursor: pointer; background: var(--card); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 12px; box-shadow: var(--shadow); animation: fade .25s ease; }
+@keyframes fade { from { opacity: 0; transform: translateY(6px); } }
+.controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+@media (max-width: 700px) { .controls { grid-template-columns: repeat(2, 1fr); } }
+label { font-size: 11.5px; color: var(--mut); display: block; margin-bottom: 3px; text-transform: uppercase; letter-spacing: .06em; }
+select, textarea, input[type=text] { width: 100%; background: var(--field); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font-size: 14px; }
+select:focus, textarea:focus { outline: 2px solid var(--acc2); }
+textarea { min-height: 84px; resize: vertical; }
+.row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+button.go { background: var(--btn); color: #fff; border: 0; border-radius: 9px;
+  padding: 10px 26px; font-size: 15px; font-weight: 700; cursor: pointer; }
+button.go:disabled { opacity: .55; cursor: wait; }
+button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 13.5px; }
+.badge { display: inline-block; font-size: 12.5px; padding: 3px 10px; border-radius: 6px;
+  background: var(--bg2); border: 1px solid var(--line); color: var(--mut); margin: 6px 6px 0 0; }
+.badge.model { color: var(--acc2); border-color: var(--acc2); }
+.cite { display: inline-block; font-size: 12px; font-family: Consolas, monospace;
+  background: var(--bg2); border: 1px dashed var(--acc); color: var(--acc);
+  border-radius: 6px; padding: 2px 8px; margin: 6px 6px 0 0; }
+.msg-u { border-left: 3px solid var(--acc2); }
+.msg-a { border-left: 3px solid var(--acc); }
+.msg-warn { border-left: 3px solid var(--warn); }
+.msg-err { border-left: 3px solid var(--bad); }
+h3 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--mut); }
+.kv { display: flex; justify-content: space-between; font-size: 13.5px; padding: 3px 0; }
+.kv b { font-variant-numeric: tabular-nums; }
+.chip { display: inline-block; font-size: 12px; background: var(--bg2); border: 1px solid var(--line);
+  border-radius: 14px; padding: 2px 10px; margin: 3px 4px 0 0; }
+#toast { position: fixed; right: 18px; bottom: 18px; background: var(--card); color: var(--ink);
+  border: 1px solid var(--acc2); border-radius: 10px; padding: 10px 16px; display: none; box-shadow: var(--shadow); }
+.thinking::after { content: " …"; animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+footer { text-align: center; color: var(--mut); font-size: 12px; padding: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">HEDRON<small>sovereign workbench · 100% local</small></div>
+  <div class="pill" id="proofPill">● Local · checking…</div>
+  <button id="themeBtn" title="toggle theme">light / dark</button>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <div class="controls">
+        <div><label>Mode</label><select id="mode"><option>Auto</option><option>Manual</option></select></div>
+        <div><label>Scope</label><select id="scope"><option>Auto</option><option>Single</option><option>Swarm</option></select></div>
+        <div><label>Model</label><select id="model"><option>Auto</option><option>qwen-7b</option><option>ornith-9b</option><option>qwen2.5vl-3b</option><option>qwen-3b</option></select></div>
+        <div><label>Template</label><select id="tpl"><option>Ask</option><option>Yes — My-SOP-Note</option><option>No — Auto style</option></select></div>
+      </div>
+      <label>Ask</label>
+      <textarea id="prompt" placeholder="What is the cavitation shutdown torque per SOP?"></textarea>
+      <div class="row">
+        <button class="go" id="go">Go</button>
+        <label class="ghost" style="cursor:pointer">attach file<input type="file" id="file" hidden accept=".pdf,.png,.jpg,.jpeg"></label>
+        <span id="files"></span>
+      </div>
+    </div>
+    <div id="thread"></div>
+  </section>
+  <aside>
+    <div class="card"><h3>Vault</h3><div id="vault"><span class="chip">SOP-PUMP-01</span><span class="chip">SOP-VALVE-02</span></div></div>
+    <div class="card"><h3>Proof</h3><div id="proof"><div class="kv"><span>status</span><b>…</b></div></div></div>
+    <div class="card"><h3>Artifact</h3>
+      <div class="row"><select id="kind"><option value="docx">SOP note (.docx)</option><option value="xlsx">Data sheet (.xlsx)</option><option value="pptx">Brief (.pptx)</option></select></div>
+      <div class="row"><button class="ghost" id="dl">Generate from last answer</button></div>
+    </div>
+  </aside>
+</main>
+<div id="toast"></div>
+<footer>Hedron MVP · localhost only · <span id="auditLine">audit: …</span></footer>
+<script>
+const $ = id => document.getElementById(id);
+let lastModel = null, lastAnswer = "", attachedFiles = 0, theme = localStorage.getItem("hedron-theme") || "dark";
+document.documentElement.dataset.theme = theme;
+$("themeBtn").onclick = () => {
+  theme = theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("hedron-theme", theme);
+};
+function toast(t) { const e = $("toast"); e.textContent = t; e.style.display = "block"; setTimeout(() => e.style.display = "none", 3500); }
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+async function refreshProof() {
+  try {
+    const p = await (await fetch("/proof")).json();
+    $("proofPill").textContent = "● Local · " + p.external_calls + " external";
+    $("proof").innerHTML =
+      kv("external calls", p.external_calls) + kv("audit events", p.audit_events) +
+      kv("chain", p.chain_ok ? "ok" : "BROKEN") + kv("resident", (p.resident || []).join(", ") || "—") +
+      kv("ctx", p.num_ctx);
+    $("auditLine").textContent = "audit: " + p.audit_events + " events · chain " + (p.chain_ok ? "ok" : "BROKEN");
+  } catch { $("proofPill").textContent = "● backend offline"; }
+}
+const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${esc(String(v))}</b></div>`;
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try {
+    const r = await (await fetch("/upload", { method: "POST", body: fd })).json();
+    if (!r.ok) throw new Error(r.error || "rejected");
+    attachedFiles++;
+    const c = document.createElement("span"); c.className = "chip";
+    c.textContent = r.name + (r.chunks ? " · " + r.chunks + " chunks" : " · vision");
+    $("files").appendChild(c); $("vault").appendChild(c.cloneNode(true));
+    toast("vault: " + r.name + " ingested");
+  } catch (err) { toast("upload failed: " + err.message); }
+  e.target.value = "";
+};
+$("go").onclick = async () => {
+  const q = $("prompt").value.trim(); if (!q) return;
+  const btn = $("go"); btn.disabled = true; btn.textContent = "Routing…";
+  addMsg("u", esc(q));
+  const think = addMsg("a thinking", "routing locally");
+  try {
+    const r = await (await fetch("/chat", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: q, mode: $("mode").value, scope: $("scope").value,
+        model: $("model").value, template: $("tpl").value, files: attachedFiles }) })).json();
+    think.remove();
+    (r.nodes || []).forEach((n, i) => {
+      const m = n.router.model;
+      if (lastModel && m !== lastModel) toast("model switched → " + m + " (" + n.router.reason + ")");
+      lastModel = m;
+      const cites = (n.cites || []).map(c => `<span class="cite">${esc(c)}</span>`).join("");
+      const warn = String(n.answer).startsWith("not in SOP");
+      addMsg(warn ? "a msg-warn" : "a",
+        `<span class="badge">node ${i + 1} · ${esc(r.scope)} · score ${r.classifier.score}</span>` +
+        `<span class="badge model">routed: ${esc(m)} · ${esc(n.router.reason)}</span><br><br>` +
+        esc(n.answer).replace(/\n/g, "<br>") + (cites ? "<br>" + cites : ""));
+      if (i === 0) lastAnswer = n.answer;
+    });
+    attachedFiles = 0; $("files").innerHTML = "";
+    refreshProof();
+  } catch {
+    think.remove();
+    addMsg("a msg-err", "<b>backend unreachable.</b> Start it with <code>python app/server.py</code> — nothing was sent anywhere.");
+  }
+  btn.disabled = false; btn.textContent = "Go";
+};
+function addMsg(cls, html) {
+  const d = document.createElement("div"); d.className = "card msg-" + cls; d.innerHTML = html;
+  $("thread").prepend(d); return d;
+}
+$("dl").onclick = async () => {
+  if (!lastAnswer) return toast("ask something first");
+  const kind = $("kind").value;
+  const r = await fetch("/artifact", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, title: lastAnswer.slice(0, 40), lines: lastAnswer.split("\n").slice(0, 20) }) });
+  if (!r.ok) return toast("artifact failed");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(await r.blob()); a.download = "hedron." + kind; a.click();
+  toast("artifact downloaded");
+};
+refreshProof(); setInterval(refreshProof, 15000);
+</script>
+</body>
+</html>
