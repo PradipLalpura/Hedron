@@ -172,11 +172,13 @@ $("newChat").onclick = () => {
   threads[sid] = $("thread").innerHTML;
   sid = "chat-" + Date.now().toString(36);
   $("thread").innerHTML = ""; lastModel = null; lastAnswer = "";
+  attachedFiles = 0; attachedNames = []; $("files").innerHTML = "";
   refreshSessions();
 };
 $("sess").onchange = async e => {
   threads[sid] = $("thread").innerHTML;
   sid = e.target.value;
+  attachedFiles = 0; attachedNames = []; $("files").innerHTML = "";
   if (threads[sid] !== undefined) { $("thread").innerHTML = threads[sid]; }
   else {
     try {
@@ -207,7 +209,7 @@ async function refreshProof() {
 const kv = (k, v) => `<div class="kv"><span>${k}</span><b>${esc(String(v))}</b></div>`;
 $("file").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
-  const fd = new FormData(); fd.append("file", f);
+  const fd = new FormData(); fd.append("file", f); fd.append("session_id", sid);
   try {
     const r = await (await fetch("/upload", { method: "POST", body: fd })).json();
     if (!r.ok) throw new Error(r.error || "rejected");

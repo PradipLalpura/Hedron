@@ -6,7 +6,7 @@ import re
 import subprocess
 import time
 from collections import deque
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -72,7 +72,10 @@ HIST_CHARS = 1500
 
 def _sess(sid: str) -> dict:
     sid = (sid or "default")[:40]
-    return _SESS.setdefault(sid, {"title": sid, "hist": []})
+    s = _SESS.setdefault(sid, {"title": sid, "hist": [], "files": []})
+    if "files" not in s:
+        s["files"] = []
+    return s
 
 def _hist_text(sid: str) -> str:
     h = _sess(sid)["hist"][-HIST_TURNS:]
@@ -145,6 +148,17 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 UI_PATH = os.path.join(_HERE, "ui.html")
 SOPS_DIR = os.path.join(_HERE, "sops")
 ART_DIR = os.path.join(_HERE, "..", "vault_store", "artifacts")
+try:
+    _FIXTURES = frozenset(os.path.splitext(f)[0].lower() for f in os.listdir(SOPS_DIR)
+                          if os.path.isfile(os.path.join(SOPS_DIR, f)))
+except Exception:
+    _FIXTURES = frozenset()  # built-in docs: shared knowledge in every chat
+
+
+def session_hits(hits: list, names: list) -> list:
+    """Global search minus other chats' uploads. Fixtures + own files only."""
+    allowed = set(_FIXTURES) | {os.path.splitext(str(x))[0].lower() for x in (names or [])}
+    return [h for h in (hits or []) if h["doc"].lower() in allowed]
 
 # ── 1. Score classifier 0-100 ──────────────────────────────────────────
 def classify(prompt: str, n_files: int) -> dict:
@@ -286,6 +300,7 @@ def generate(model: str, prompt: str, images: list | None = None) -> str:
 def chat(body: ChatIn):
     cls = classify(body.prompt, body.files)
     scope = body.scope if body.scope in ("Single", "Swarm") else cls["scope"]
+    sid = (body.session_id or "default")[:40]
     if body.mode == "Manual" and body.model != "Auto":
         nodes = [{"subtask": body.prompt, "router": {"model": body.model, "reason": "manual pin"}}]
     else:
@@ -299,9 +314,15 @@ def chat(body: ChatIn):
                   "router": {"model": "ornith-9b", "reason": "swarm build + tools"}}]
     out = []
     names = []
+    reg = {x.lower() for x in _sess(sid)["files"]}  # this chat's files only
     for n_ in (body.filenames or []) + mentioned_files(body.prompt):
-        if n_.lower() not in [x.lower() for x in names]:
+        if n_.lower() not in [x.lower() for x in names] and (
+                n_.lower() in reg or n_ in (body.filenames or [])):
             names.append(n_)
+    for n_ in names:  # attach-this-turn joins the chat registry
+        if n_.lower() not in reg:
+            _sess(sid)["files"].append(n_)
+            reg.add(n_.lower())
     named = named_chunks(names) if names else []
     _rag = None
     try:
@@ -312,6 +333,10 @@ def chat(body: ChatIn):
         _rag = _r
     except Exception:
         ctx, hits, cites = None, [], []
+    hits = session_hits(hits, names)  # other chats' uploads never leak via search
+    cites = [_rag.cite(h) for h in hits] if _rag else []
+    ctx = "\n".join("%s %s" % ((_rag.cite(h) if _rag else "[%s]" % h["doc"]), h["text"][:600])
+                    for h in hits) if hits else None
     if named:  # exact names win over global search; nothing else grounds files
         gh = named
         gc = [_rag.cite(h) for h in named] if _rag else []
@@ -322,7 +347,6 @@ def chat(body: ChatIn):
     sop_ask = any(k in body.prompt.lower() for k in
                   ("sop", "procedure", "manual", "policy", "shutdown", "torque", "spec"))
     want_note = body.template.startswith("Yes")  # template modal Yes→which
-    sid = (body.session_id or "default")[:40]
     hist = _hist_text(sid)
     for n in nodes[:2] if scope == "Swarm" else nodes[:1]:  # MVP Swarm = sequential, max 2
         docish = "doc" in n["router"]["reason"] or "cit" in n["router"]["reason"] or want_note
@@ -425,7 +449,7 @@ def ui():
 
 
 @app.post("/upload")
-def upload(file: UploadFile = File(...)):
+def upload(file: UploadFile = File(...), session_id: str = Form("default")):
     name = os.path.basename(file.filename or "upload.bin")
     ext = os.path.splitext(name)[1].lower()
     if ext not in (".pdf", ".png", ".jpg", ".jpeg"):
@@ -454,12 +478,21 @@ def upload(file: UploadFile = File(...)):
         except Exception:
             pass
     return {"ok": True, "name": name, "chunks": chunks, "ocr_chars": ocr_chars,
-            "vision": ext != ".pdf"}
+            "vision": ext != ".pdf",
+            "chat_files": _sess_reg(session_id, name)}
+
+
+def _sess_reg(sid: str, name: str) -> list:
+    s = _sess(sid)
+    if name.lower() not in [x.lower() for x in s["files"]]:
+        s["files"].append(name)
+    return s["files"]
 
 
 @app.get("/sessions")
 def sessions():
-    return {"sessions": [{"id": sid, "title": s["title"], "turns": len(s["hist"]) // 2}
+    return {"sessions": [{"id": sid, "title": s["title"], "turns": len(s["hist"]) // 2,
+                           "files": s.get("files", [])}
                          for sid, s in _SESS.items()]}
 
 
