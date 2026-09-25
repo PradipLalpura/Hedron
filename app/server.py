@@ -239,6 +239,13 @@ def unload_all():
 
 
 # ── 4. Generate (real Ollama, OOM retry, offline cache, mock fallback) ──
+def clean_reply(text: str) -> str:
+    """Ornith-class models leak <think> blocks and <tool_call> scaffolding into content."""
+    t = text or ""
+    t = re.sub(r"<think>.*?</think>", "", t, flags=re.S | re.I)
+    t = re.sub(r"<tool_call>.*?</tool_call>", "", t, flags=re.S | re.I)
+    return t.strip()
+
 def _ollama_chat(model: str, prompt: str, images: list | None = None) -> str:
     import ollama
     opts = {"num_ctx": NUM_CTX, "num_predict": 256}
@@ -248,8 +255,8 @@ def _ollama_chat(model: str, prompt: str, images: list | None = None) -> str:
     if images:
         msg["images"] = images
     r = ollama.chat(model=MODEL_TAGS[model], messages=[msg], options=opts, keep_alive="5m")
-    msg = r["message"]
-    text = msg.get("content") or msg.get("thinking", "")
+    m = r["message"]
+    text = clean_reply(m.get("content")) or clean_reply(m.get("thinking", ""))
     return text if text else "[empty reply]"
 
 
@@ -391,8 +398,14 @@ def file_kind(subtask: str) -> str | None:
 def _build_artifact(kind: str, title: str, lines: list) -> tuple:
     import tools as _t
     os.makedirs(ART_DIR, exist_ok=True)
-    safe = "".join(c for c in (title or "hedron")[:40] if c.isalnum() or c in (" ", "-", "_")).strip() or "hedron"
-    lines = [str(x) for x in (lines or ["—"])][:60]
+    safe = "".join(c for c in (title or "hedron")[:40] if c.isalnum() or c in (" ", "-", "_")).strip()
+    safe = safe.rsplit(" ", 1)[0] if len((title or "")) > 40 and " " in safe else safe
+    safe = safe or "hedron"
+    raw = [str(x) for x in (lines or ["—"])][:60]
+    if kind == "xlsx":
+        lines = raw  # formulas must survive verbatim
+    else:  # jury-ready files: no raw markdown markers
+        lines = [re.sub(r"^\s*#{1,4}\s*", "", l).replace("**", "").strip() for l in raw]
     if kind == "xlsx":
         rows = [[l] if l.startswith("=") else [l] for l in lines]
         return (_t.write_xlsx(os.path.join(ART_DIR, safe + ".xlsx"), [["content"]] + rows),
